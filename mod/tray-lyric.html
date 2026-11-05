@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>SMod Tray Lyric</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent; overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI",
+      Roboto, Ubuntu, Cantarell, "Noto Sans", "Helvetica Neue", Arial, "PingFang SC",
+      "Microsoft YaHei UI", "Microsoft YaHei", "Source Han Sans CN",
+      "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+  }
+  #card {
+    position: absolute; inset: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: rgb(20, 20, 28);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    /* 默认完全透明：窗口 show 出来的那一帧不能先露出完整内容，
+       否则动画会从 0 重新开始，看起来就是闪一下 */
+    opacity: 0;
+  }
+  #bg {
+    position: absolute; inset: -60px;
+    width: calc(100% + 120px); height: calc(100% + 120px);
+    object-fit: cover;
+    filter: blur(45px) saturate(1.2);
+    opacity: 1;
+  }
+  #veil {
+    position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(12, 12, 18, 0.20) 0%, rgba(12, 12, 18, 0.58) 100%);
+  }
+  #content {
+    position: relative; z-index: 2;
+    width: 100%; height: 100%;
+    padding: 14px 12px;
+    display: flex; flex-direction: column;
+  }
+  #meta { text-align: center; flex: 0 0 auto; margin-bottom: 6px; }
+  #title {
+    font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, 0.92);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #artist {
+    margin-top: 2px; font-size: 10px; color: rgba(255, 255, 255, 0.55);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #lyricRegion {
+    flex: 1 1 auto; min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    mask-image: linear-gradient(180deg, transparent 0, #000 10%, #000 90%, transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 10%, #000 90%, transparent 100%);
+  }
+  #lyricBox {
+    width: 100%;
+    display: flex; flex-direction: column;
+    justify-content: center;
+    text-align: center;
+  }
+  .lrow {
+    height: 1.58em; line-height: 1.58em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    color: rgba(248, 215, 192, 0.95);
+    transition: opacity 0.22s ease, filter 0.22s ease, transform 0.22s ease;
+  }
+  .lrow.cur { font-size: 1.06em; font-weight: 600; }
+  .lrow.tr {
+    height: 1.45em; line-height: 1.45em;
+    font-size: max(9px, 0.68em); opacity: 0.55;
+  }
+  .ly-char {
+    background-image: linear-gradient(90deg,
+      rgba(248, 215, 192, 1) 0%, rgba(248, 215, 192, 1) var(--p, 0%),
+      rgba(248, 215, 192, 0.30) var(--p, 0%), rgba(248, 215, 192, 0.30) 100%);
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent; -webkit-text-fill-color: transparent;
+  }
+  @keyframes lrowBump {
+    from { transform: translateY(6px) scale(0.965); opacity: 0.45; }
+    to { transform: none; opacity: 1; }
+  }
+  .lrow.cur.bump { animation: lrowBump 0.26s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  #empty {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; color: rgba(255, 255, 255, 0.42);
+  }
+  #empty.hidden { display: none; }
+  @keyframes cardIn {
+    from { opacity: 0; transform: scale(0.94) translateX(-10px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes cardOut {
+    from { opacity: 1; transform: none; }
+    to { opacity: 0; transform: scale(0.965) translateX(-8px); }
+  }
+  body.open #card { opacity: 1; animation: cardIn 0.24s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  body.closing #card { opacity: 1; animation: cardOut 0.16s ease-in forwards; }
+
+  /* 当前行放不下时自动来回滚动；非当前行仍然用省略号 */
+  .cur-inner {
+    display: block; width: 100%;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    will-change: transform;
+  }
+  .cur-inner.marquee {
+    width: max-content; text-overflow: clip;
+    animation: marq var(--dur, 8s) ease-in-out infinite;
+  }
+  @keyframes marq {
+    0%, 12% { transform: translateX(0); }
+    45%, 55% { transform: translateX(var(--shift, 0px)); }
+    88%, 100% { transform: translateX(0); }
+  }
+</style>
+</head>
+<body>
+  <div id="card">
+    <img id="bg" alt="" />
+    <div id="veil"></div>
+    <div id="content">
+      <div id="meta">
+        <div id="title"></div>
+        <div id="artist"></div>
+      </div>
+      <div id="lyricRegion">
+        <div id="lyricBox"></div>
+      </div>
+    </div>
+    <div id="empty" class="hidden">暂无歌词</div>
+  </div>
+
+<script>
+  var api = window.SMOD_TRAY;
+  var bg = document.getElementById("bg");
+  var titleEl = document.getElementById("title");
+  var artistEl = document.getElementById("artist");
+  var region = document.getElementById("lyricRegion");
+  var box = document.getElementById("lyricBox");
+  var emptyEl = document.getElementById("empty");
+
+  var lines = [];
+  var srcSig = "";
+  var curIdx = -2;
+  var curLine = null;
+  var spans = [];
+  var rows = [];
+  var base = 0, at = 0, hold = 0;
+  var playing = false;
+  var sizeOffset = 0;
+
+  function nowMs() {
+    return playing ? base + (Date.now() - at) : hold;
+  }
+
+  function syncClock(t) {
+    if (typeof t.posMs !== "number") return;
+    var ms = t.posMs + Math.max(0, Date.now() - (t.stamp || Date.now()));
+    base = ms; at = Date.now(); hold = ms;
+  }
+
+  var measureCtx = null;
+  var fontFam = null;
+
+  function textWidth(text, size) {
+    if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+    if (!fontFam) fontFam = getComputedStyle(box).fontFamily || "sans-serif";
+    measureCtx.font = size + "px " + fontFam;
+    return measureCtx.measureText(text).width;
+  }
+
+  // 字号按实际像素宽度拟合，行数按可用高度反推。
+  // 不能按字符数估：英文每字符比中文窄一半，按字数算会把英文压到 12px 下限，
+  // 行距跟着变窄，整屏看起来就挤成一团。
+  function calcLayout() {
+    var w = box.clientWidth || 210;
+    var samples = [];
+    for (var k = -3; k <= 3; k++) {
+      var l = lines[curIdx + k];
+      if (l && l.t) samples.push(l.t);
+    }
+    if (!samples.length) samples.push("♪");
+
+    var room = (w - 2) / 1.06;
+    var fs = 12;
+    for (var s = 26; s >= 12; s--) {
+      var ok = true;
+      for (var j = 0; j < samples.length; j++) {
+        if (textWidth(samples[j], s) > room) { ok = false; break; }
+      }
+      if (ok) { fs = s; break; }
+    }
+    // 面板里的手动字号偏移，0 = 纯自适应
+    fs = Math.max(12, Math.min(34, fs + sizeOffset));
+
+    var avail = (region.clientHeight || 360) - 6;
+    var n = Math.floor(avail / (fs * 1.58));
+    n = Math.max(3, Math.min(19, n));
+    if (n % 2 === 0) n -= 1;
+    box.style.fontSize = fs + "px";
+    return n;
+  }
+
+  var curInner = null;
+
+  function buildSpans(el, line) {
+    el.innerHTML = "";
+    spans = [];
+    var inner = document.createElement("div");
+    inner.className = "cur-inner";
+    el.appendChild(inner);
+    curInner = inner;
+
+    var chars = Array.from((line && line.t) || "♪");
+    for (var i = 0; i < chars.length; i++) {
+      var sp = document.createElement("span");
+      sp.className = "ly-char";
+      sp.textContent = chars[i];
+      inner.appendChild(sp);
+      spans.push({ el: sp, w: ((line && line.w) || [])[i] || null });
+    }
+  }
+
+  // 当前行比容器宽时改成跑马灯，让用户能看到被省略的后半句
+  function checkOverflow() {
+    if (!curInner) return;
+    var host = curInner.parentElement;
+    var over = curInner.scrollWidth - host.clientWidth;
+    if (over > 4) {
+      curInner.style.setProperty("--shift", "-" + (over + 2) + "px");
+      curInner.style.setProperty(
+        "--dur",
+        Math.max(6, Math.min(18, 3 + over / 22)).toFixed(1) + "s"
+      );
+      curInner.classList.add("marquee");
+    } else {
+      curInner.classList.remove("marquee");
+      curInner.style.removeProperty("--shift");
+    }
+  }
+
+  function paint(ms) {
+    for (var i = 0; i < spans.length; i++) {
+      var it = spans[i], p = 0;
+      if (it.w && it.w[1] > it.w[0]) p = (ms - it.w[0]) / (it.w[1] - it.w[0]);
+      else if (it.w) p = ms >= it.w[1] ? 1 : 0;
+      else if (curLine && curLine.e > curLine.s) p = (ms - curLine.s) / (curLine.e - curLine.s);
+      p = Math.max(0, Math.min(1, p));
+      it.el.style.setProperty("--p", (p * 100).toFixed(1) + "%");
+    }
+  }
+
+  function rebuild() {
+    var n = calcLayout();
+    var half = (n - 1) / 2;
+    box.innerHTML = "";
+    rows = [];
+    curLine = lines[curIdx] || null;
+
+    // 开头 / 结尾处不足 half 行时不补空行，整块在区域内居中
+    var startK = -Math.min(half, curIdx);
+    var endK = Math.min(half, lines.length - 1 - curIdx);
+    var curPos = -startK;
+
+    for (var k = startK; k <= endK; k++) {
+      var line = lines[curIdx + k];
+      var el = document.createElement("div");
+      el.className = "lrow" + (k === 0 ? " cur" : "");
+      if (k === 0) {
+        buildSpans(el, line);
+      } else {
+        var dist = Math.abs(k);
+        el.textContent = line ? line.t : "";
+        el.style.opacity = String(Math.max(0.08, 0.46 - dist * 0.05));
+        el.style.filter = "blur(" + Math.min(2.4, 0.45 + dist * 0.3).toFixed(2) + "px)";
+        el.style.transform = "scale(" + Math.max(0.9, 1 - dist * 0.011).toFixed(3) + ")";
+      }
+      box.appendChild(el);
+      rows.push(el);
+    }
+
+    // 译文紧跟当前行
+    if (curLine && curLine.tr) {
+      var tr = document.createElement("div");
+      tr.className = "lrow tr";
+      tr.textContent = curLine.tr;
+      box.insertBefore(tr, rows[curPos + 1] || null);
+    }
+
+    var curEl = rows[curPos];
+    curEl.classList.remove("bump");
+    void curEl.offsetWidth;
+    curEl.classList.add("bump");
+    checkOverflow();
+  }
+
+  function draw() {
+    if (!lines.length) {
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+    emptyEl.classList.add("hidden");
+
+    var ms = nowMs();
+    var cur = -1;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].s <= ms) cur = i;
+      else break;
+    }
+    if (cur !== curIdx) {
+      curIdx = cur;
+      rebuild();
+    }
+    paint(ms);
+  }
+
+  function render(d) {
+    if (!d) return;
+    var t = d.track || {};
+    titleEl.textContent = t.title || "未在播放";
+    artistEl.textContent = t.artist || "";
+
+    if (t.cover && bg.getAttribute("src") !== t.cover) bg.src = t.cover;
+
+    playing = !!t.playing;
+    if (Array.isArray(t.lines)) {
+      var first = t.lines[0];
+      var sig = t.lines.length + ":" + (first ? first.s + first.t : "");
+      if (sig !== srcSig) {
+        srcSig = sig;
+        lines = t.lines;
+        curIdx = -2;
+      }
+    }
+    var nextOffset = Number(d.sizeOffset) || 0;
+    if (nextOffset !== sizeOffset) {
+      sizeOffset = nextOffset;
+      if (lines.length && curIdx !== -2) rebuild();
+    }
+
+    syncClock(t);
+    draw();
+  }
+
+  api.onLyric(render);
+  api.onLyricOut(function () {
+    document.body.classList.remove("open");
+    document.body.classList.add("closing");
+  });
+
+  var resizeTimer = 0;
+  window.addEventListener("resize", function () {
+    if (resizeTimer) return;
+    resizeTimer = setTimeout(function () {
+      resizeTimer = 0;
+      if (lines.length && curIdx !== -2) rebuild();
+    }, 80);
+  });
+
+  setInterval(draw, 60);
+  api.lyricReady();
+</script>
+</body>
+</html>

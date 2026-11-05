@@ -1,0 +1,33 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#33333F"/>
+      <stop offset="0.55" stop-color="#1E1E28"/>
+      <stop offset="1" stop-color="#131319"/>
+    </linearGradient>
+    <linearGradient id="bar" x1="256" y1="150" x2="256" y2="362" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.98"/>
+      <stop offset="1" stop-color="#F8D7C0" stop-opacity="0.86"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="120" y1="70" x2="330" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="card">
+      <rect width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+    <ellipse cx="256" cy="120" rx="300" ry="180" fill="#6E6BE8" opacity="0.16"/>
+    <ellipse cx="150" cy="400" rx="240" ry="150" fill="#D85A30" opacity="0.10"/>
+    <path d="M0 0H512V190C368 268 168 268 0 196V0Z" fill="url(#sheen)"/>
+    <rect x="176" y="268" width="36" height="94" rx="18" fill="url(#bar)" opacity="0.72"/>
+    <rect x="238" y="196" width="36" height="166" rx="18" fill="url(#bar)"/>
+    <rect x="300" y="240" width="36" height="122" rx="18" fill="url(#bar)" opacity="0.72"/>
+    <rect x="176" y="276" width="36" height="9" rx="4.5" fill="#FFFFFF" opacity="0.55"/>
+    <rect x="238" y="204" width="36" height="9" rx="4.5" fill="#FFFFFF" opacity="0.65"/>
+    <rect x="300" y="248" width="36" height="9" rx="4.5" fill="#FFFFFF" opacity="0.55"/>
+    <rect x="3" y="3" width="506" height="506" rx="113" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="6"/>
+  </g>
+</svg>

@@ -1,0 +1,17 @@
+{
+  "name": "smod",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "本地音乐播放器的桌面增强层：自绘托盘菜单、二级菜单、独立歌词窗、液态玻璃皮肤与设置面板，全部运行时注入，不改动原程序",
+  "bin": {
+    "smod": "bin/smod.mjs"
+  },
+  "scripts": {
+    "start": "node bin/smod.mjs start",
+    "status": "node bin/smod.mjs status"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "AGPL-3.0-or-later"
+}

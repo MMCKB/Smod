@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>SMod Tray Menu</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 248px; height: 100%;       /* 固定宽度，别用 100% 跟着窗口抖动 */
+    background: transparent;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  body { padding: 4px; }
+
+  /* 跟随系统的原生菜单配色，只是外框多了圆角 */
+  :root {
+    --m-bg: #f9f9f9;
+    --m-fg: #1a1a1a;
+    --m-border: rgba(0, 0, 0, 0.10);
+    --m-hover: rgba(0, 0, 0, 0.055);
+    --m-sep: rgba(0, 0, 0, 0.08);
+    --m-sub: rgba(0, 0, 0, 0.52);
+    --m-dim: rgba(0, 0, 0, 0.26);
+    --m-shadow: 0 2px 6px rgba(0, 0, 0, 0.10);
+    --m-icon: brightness(0) opacity(0.74);
+  }
+  body.dark {
+    --m-bg: #2b2b2b;
+    --m-fg: #f2f2f2;
+    --m-border: rgba(255, 255, 255, 0.10);
+    --m-hover: rgba(255, 255, 255, 0.09);
+    --m-sep: rgba(255, 255, 255, 0.10);
+    --m-sub: rgba(255, 255, 255, 0.55);
+    --m-dim: rgba(255, 255, 255, 0.30);
+    --m-shadow: 0 2px 6px rgba(0, 0, 0, 0.34);
+    --m-icon: none;
+  }
+
+  #card {
+    width: 240px;                     /* 固定，避免窗口宽度变化带着按钮跑 */
+    border-radius: 10px;              /* 四周小圆角 */
+    overflow: hidden;
+    padding: 5px;
+    color: var(--m-fg);
+    background: var(--m-bg);          /* 100% 不透明 */
+    border: 1px solid var(--m-border);
+    box-shadow: var(--m-shadow);
+  }
+
+  /* ---- 顶部：封面 + 歌曲信息 + 进度条 + 三大控制键 ---- */
+  #now { padding: 4px 4px 0; }
+  #now.hidden, #nowSep.hidden { display: none; }
+  .np-row { display: flex; align-items: center; gap: 10px; padding: 2px 2px 8px; }
+  #cover {
+    width: 42px; height: 42px; flex-shrink: 0;
+    border-radius: 6px; object-fit: cover;
+    background: var(--m-hover);
+    border: 1px solid var(--m-border);
+  }
+  #meta { min-width: 0; flex: 1; }
+  #title {
+    font-size: 13px; font-weight: 600; line-height: 1.35;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #artist {
+    margin-top: 3px; font-size: 11px; color: var(--m-sub);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  #progress { padding: 0 4px 9px; }
+  .bar { height: 3px; border-radius: 9999px; background: var(--m-sep); overflow: hidden; }
+  #barFill { height: 100%; width: 0; border-radius: 9999px; background: var(--m-fg); }
+  .times {
+    display: flex; justify-content: space-between;
+    margin-top: 4px; font-size: 10px; color: var(--m-sub);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #controls {
+    display: flex; align-items: center; justify-content: center;
+    gap: 16px; padding: 1px 0 6px;
+  }
+  .ctl {
+    width: 32px; height: 32px; flex-shrink: 0;
+    border: 0; border-radius: 9999px; padding: 0;
+    background: transparent; color: var(--m-fg);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .ctl:hover { background: var(--m-hover); }
+  .ctl svg { width: 15px; height: 15px; fill: currentColor; }
+  .ctl.main { width: 38px; height: 38px; background: var(--m-fg); color: var(--m-bg); }
+  .ctl.main:hover { opacity: 0.84; }
+  .ctl.main svg { width: 17px; height: 17px; }
+
+  #head {
+    display: flex; align-items: center; gap: 7px;
+    height: 29px; padding: 0 8px; margin-bottom: 4px;
+    font-size: 11px; color: var(--m-sub);
+    border-bottom: 1px solid var(--m-sep);
+    cursor: pointer;
+  }
+  #head .arrow { font-size: 15px; line-height: 1; }
+  #head.hidden { display: none; }
+
+  .row {
+    display: flex; align-items: center; gap: 9px;
+    height: 32px; padding: 0 9px;
+    border-radius: 6px;
+    font-size: 12.5px; line-height: 1;
+    cursor: pointer;
+  }
+  .row:hover { background: var(--m-hover); }
+  .row.disabled { opacity: 0.42; cursor: default; }
+  .row.disabled:hover { background: transparent; }
+  .row img { width: 15px; height: 15px; flex-shrink: 0; filter: var(--m-icon); }
+  .row .ph { width: 15px; flex-shrink: 0; }
+  .row .txt {
+    flex: 1; min-width: 0;             /* 不加 min-width:0，nowrap 文本会撑宽整行 */
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row .tail { font-size: 12px; opacity: 0.55; flex-shrink: 0; }
+
+  .sep { height: 1px; margin: 4px 8px; background: var(--m-sep); }
+  #nowSep { margin-top: 0; margin-bottom: 6px; }
+  #empty { padding: 16px 10px; font-size: 12px; color: var(--m-sub); text-align: center; }
+
+  /* ---- 歌词区：三大控制键下面的独立分区 ---- */
+  .lyric-sep { margin: 9px 4px 0; }
+  #lyric {
+    position: relative;
+    margin: 7px 2px 2px;
+    padding: 7px 8px 8px;
+    border-radius: 8px;
+    background: var(--m-hover);
+    border: 1px solid var(--m-border);
+    overflow: hidden;
+  }
+  #lyric.hidden { display: none; }
+  .lyric-row {
+    height: 18px; line-height: 18px; font-size: 11px;
+    text-align: center; white-space: nowrap; overflow: hidden;
+    color: var(--m-sub);
+    /* 景深：非当前行淡出 + 轻模糊 + 缩小，和播放页一个路子 */
+    opacity: 0.36; filter: blur(1px); transform: scale(0.93);
+    transition: opacity .25s ease, transform .25s ease, filter .25s ease;
+  }
+  .lyric-row.cur {
+    height: 22px; line-height: 22px; font-size: 12px; font-weight: 600;
+    margin: 2px 0;
+    opacity: 1; filter: none; transform: none;
+  }
+  .lyric-row.tr {
+    height: 15px; line-height: 15px; font-size: 10px;
+    opacity: 0.5; filter: none; transform: none;
+  }
+  .lyric-row.tr.hidden { display: none; }
+
+  /* 逐字填充：跟播放页一样按字的时间戳推进，用 background-clip 上色 */
+  .ly-char {
+    background-image: linear-gradient(90deg,
+      var(--m-fg) 0%, var(--m-fg) var(--p, 0%),
+      var(--m-dim) var(--p, 0%), var(--m-dim) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+  }
+  @keyframes lyBump {
+    from { transform: translateY(5px) scale(0.96); opacity: 0.55; }
+    to   { transform: none; opacity: 1; }
+  }
+  .lyric-row.cur.bump { animation: lyBump .24s ease-out; }
+
+  /* 歌词区左上角的「独立歌词」按钮 */
+  #lyricPop {
+    position: absolute; top: 3px; left: 3px;
+    width: 20px; height: 20px; padding: 0;
+    border: 0; border-radius: 5px;
+    background: transparent; color: var(--m-sub);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; opacity: 0.5;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  #lyricPop:hover { opacity: 1; background: var(--m-hover); }
+  #lyricPop.active { opacity: 1; background: var(--m-hover); color: var(--m-fg); }
+  #lyricPop svg {
+    width: 12px; height: 12px;
+    fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round;
+    transition: transform 0.18s ease;
+  }
+  #lyricPop.active svg { transform: rotate(180deg); }
+
+  /* 精简掉的自绘区块 */
+  .part-hidden { display: none !important; }
+
+  /* 应用内置媒体图标 */
+  #controls img { width: 16px; height: 16px; filter: var(--m-icon); }
+  /* 播放键是实心圆：浅色主题下圆是深色、图标要留白；
+     深色主题下圆是浅色、图标反而要转深，正好和 --m-icon 相反 */
+  #controls .main img { width: 20px; height: 20px; filter: brightness(0) invert(1); }
+  body.dark #controls .main img { filter: brightness(0); }
+
+  /* 二级菜单独立窗口：从主菜单旁边滑入 / 滑出 */
+  @keyframes subIn {
+    from { opacity: 0; transform: translateX(-16px) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+  }
+  @keyframes subOut {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateX(-12px) scale(0.98); }
+  }
+  body.sub-in #card { animation: subIn .2s cubic-bezier(.2, .8, .2, 1); }
+  body.sub-out #card { animation: subOut .18s ease-in forwards; }
+
+  /* 二级页之间切换：旧内容向左滑出，新内容从右滑入 */
+  @keyframes subSwapOut {
+    from { opacity: 1; transform: translateX(0); }
+    to   { opacity: 0; transform: translateX(-14px); }
+  }
+  @keyframes subSwapIn {
+    from { opacity: 0; transform: translateX(16px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  body.sub-swap-out #head,
+  body.sub-swap-out #list { animation: subSwapOut .15s ease-in forwards; }
+  body.sub-swap-in #head,
+  body.sub-swap-in #list { animation: subSwapIn .2s cubic-bezier(.2, .8, .2, 1); }
+</style>
+</head>
+<body>
+  <div id="card">
+    <div id="now">
+      <div class="np-row">
+        <img id="cover" alt="" />
+        <div id="meta">
+          <div id="title"></div>
+          <div id="artist"></div>
+        </div>
+      </div>
+      <div id="progress">
+        <div class="bar"><div id="barFill"></div></div>
+        <div class="times"><span id="tCur">0:00</span><span id="tDur">0:00</span></div>
+      </div>
+      <div id="controls">
+        <button class="ctl" data-k="prev" title="上一曲" type="button">
+          <svg viewBox="0 0 24 24"><path d="M7 6v12M18 6l-9 6 9 6V6z"/></svg>
+        </button>
+        <button class="ctl main" data-k="play" title="播放" type="button">
+          <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7V5z"/></svg>
+        </button>
+        <button class="ctl" data-k="next" title="下一曲" type="button">
+          <svg viewBox="0 0 24 24"><path d="M17 6v12M6 6l9 6-9 6V6z"/></svg>
+        </button>
+      </div>
+
+      <div class="sep lyric-sep"></div>
+      <div id="lyric" class="hidden">
+        <button id="lyricPop" title="独立歌词窗口" type="button">
+          <svg viewBox="0 0 24 24"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+        </button>
+        <div class="lyric-row" id="lyPrev"></div>
+        <div class="lyric-row cur" id="lyCur"></div>
+        <div class="lyric-row tr hidden" id="lyTr"></div>
+        <div class="lyric-row" id="lyNext"></div>
+      </div>
+    </div>
+    <div class="sep" id="nowSep"></div>
+
+    <div id="head" class="hidden"><span class="arrow">‹</span><span id="headText"></span></div>
+    <div id="list"></div>
+  </div>
+
+<script>
+  var api = window.SMOD_TRAY;
+  var list = document.getElementById("list");
+  var head = document.getElementById("head");
+  var headText = document.getElementById("headText");
+  var card = document.getElementById("card");
+  var now = document.getElementById("now");
+  var nowSep = document.getElementById("nowSep");
+  var cover = document.getElementById("cover");
+  var titleEl = document.getElementById("title");
+  var artistEl = document.getElementById("artist");
+  var playBtn = document.querySelector(".ctl.main");
+  var prevBtn = document.querySelector('[data-k="prev"]');
+  var nextBtn = document.querySelector('[data-k="next"]');
+  var playIcon = document.getElementById("playIcon");
+  var barFill = document.getElementById("barFill");
+  var tCur = document.getElementById("tCur");
+  var tDur = document.getElementById("tDur");
+  var npRow = document.querySelector(".np-row");
+  var progressEl = document.getElementById("progress");
+  var controlsEl = document.getElementById("controls");
+  var lyricSep = document.querySelector(".lyric-sep");
+  var lyricAllowed = true;
+
+  var ICON_PLAY = '<path d="M8 5l11 7-11 7V5z"/>';
+  var ICON_PAUSE = '<path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/>';
+  var lastCover = "";
+  var lastPlaying = null;
+  var progress = { pos: 0, dur: 0, playing: false };
+
+  function measure() {
+    api.resize(card.getBoundingClientRect().height + 12);
+  }
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2);
+  }
+
+  function drawProgress() {
+    if (!progress.dur) return;
+    var pct = Math.min(100, Math.max(0, (progress.pos / progress.dur) * 100));
+    barFill.style.width = pct.toFixed(2) + "%";
+    tCur.textContent = fmt(progress.pos);
+    tDur.textContent = fmt(progress.dur);
+  }
+
+  // 菜单开着时本地走秒，不用每秒跨进程取一次进度
+  setInterval(function () {
+    if (progress.playing && progress.dur && progress.pos < progress.dur) {
+      progress.pos += 1;
+      drawProgress();
+    }
+  }, 1000);
+
+  /* ---- 歌词区：主进程给毫秒基准 + 逐字时间轴，这里本地推进 ---- */
+  var lyricBox = document.getElementById("lyric");
+  var lyPrev = document.getElementById("lyPrev");
+  var lyCur = document.getElementById("lyCur");
+  var lyTr = document.getElementById("lyTr");
+  var lyNext = document.getElementById("lyNext");
+  var lyricLines = [];
+  var lyricSourceSig = "";
+  var lyricCurIdx = -2;
+  var lyricShown = false;
+  var lyricTrShown = false;
+  var curSpans = [];
+  var curLine = null;
+
+  // 不再用秒级进度推算（会差 1 秒以上）。主窗口采样一次毫秒位置，
+  // 菜单窗口用 Date.now() 差值本地推进；暂停时固定在结算值。
+  var lyricBase = 0, lyricAt = 0, lyricHold = 0;
+
+  function lyricNow() {
+    return progress.playing ? lyricBase + (Date.now() - lyricAt) : lyricHold;
+  }
+
+  function syncClock(t) {
+    if (typeof t.posMs !== "number") return;
+    var ms = t.posMs + Math.max(0, Date.now() - (t.stamp || Date.now()));
+    lyricBase = ms;
+    lyricAt = Date.now();
+    lyricHold = ms;
+  }
+
+  function buildCurSpans(line) {
+    lyCur.innerHTML = "";
+    curSpans = [];
+    var chars = Array.from((line && line.t) || "♪");
+    for (var i = 0; i < chars.length; i++) {
+      var sp = document.createElement("span");
+      sp.className = "ly-char";
+      sp.textContent = chars[i];
+      lyCur.appendChild(sp);
+      curSpans.push({ el: sp, w: ((line && line.w) || [])[i] || null });
+    }
+  }
+
+  function paintChars(ms) {
+    for (var i = 0; i < curSpans.length; i++) {
+      var it = curSpans[i], p = 0;
+      if (it.w && it.w[1] > it.w[0]) {
+        p = (ms - it.w[0]) / (it.w[1] - it.w[0]);
+      } else if (it.w) {
+        p = ms >= it.w[1] ? 1 : 0;
+      } else if (curLine && curLine.e > curLine.s) {
+        // 没逐字时间戳的歌词，退化为整行按比例填充
+        p = (ms - curLine.s) / (curLine.e - curLine.s);
+      }
+      p = Math.max(0, Math.min(1, p));
+      it.el.style.setProperty("--p", (p * 100).toFixed(1) + "%");
+    }
+  }
+
+  function drawLyric() {
+    if (!lyricLines.length || !lyricAllowed) {
+      if (lyricShown) {
+        lyricBox.classList.add("hidden");
+        lyricShown = false;
+        measure();
+      }
+      return;
+    }
+
+    var ms = lyricNow();
+    var cur = -1;
+    for (var i = 0; i < lyricLines.length; i++) {
+      if (lyricLines[i].s <= ms) cur = i;
+      else break;
+    }
+
+    if (cur !== lyricCurIdx) {
+      lyricCurIdx = cur;
+      var at = function (k) {
+        return k >= 0 && k < lyricLines.length ? lyricLines[k] : null;
+      };
+      var p = at(cur - 1), c = at(cur), n = at(cur + 1);
+      lyPrev.textContent = p ? p.t : "";
+      lyNext.textContent = n ? n.t : "";
+      curLine = c;
+      buildCurSpans(c);
+
+      var trOn = !!(c && c.tr);
+      if (trOn !== lyricTrShown) {
+        lyricTrShown = trOn;
+        lyTr.classList.toggle("hidden", !trOn);
+        lyTr.textContent = trOn ? c.tr : "";
+        measure();
+      }
+
+      // 换行动画：重置 class 强制重播
+      lyCur.classList.remove("bump");
+      void lyCur.offsetWidth;
+      lyCur.classList.add("bump");
+
+      if (!lyricShown) {
+        lyricBox.classList.remove("hidden");
+        lyricShown = true;
+        measure();
+      }
+    }
+    paintChars(ms);
+  }
+
+  setInterval(drawLyric, 60);
+
+  function setCtlIcon(btn, src) {
+    if (!btn || !src || btn.dataset.icon === src) return;
+    btn.dataset.icon = src;
+    btn.innerHTML = '<img src="' + src + '" alt="" />';
+  }
+
+  function renderTrack(t) {
+    if (!t) return;
+    titleEl.textContent = t.title || "未在播放";
+    artistEl.textContent = t.artist || "";
+
+    if (t.cover && t.cover !== lastCover) {
+      cover.src = t.cover;
+      lastCover = t.cover;
+      cover.style.opacity = "1";
+    } else if (!t.cover && lastCover) {
+      cover.removeAttribute("src");
+      lastCover = "";
+      cover.style.opacity = "0";
+    }
+
+    var playing = !!t.playing;
+    var hasIcons = !!(t.icons && t.icons.play);
+    if (hasIcons) {
+      // 用应用托盘菜单自带的图标；播放/暂停切换时图标会随 label 一起换
+      setCtlIcon(prevBtn, t.icons.prev);
+      setCtlIcon(playBtn, t.icons.play);
+      setCtlIcon(nextBtn, t.icons.next);
+    }
+    playBtn.title = playing ? "暂停" : "播放";
+    if (lastPlaying !== playing) {
+      if (!hasIcons && playIcon) playIcon.innerHTML = playing ? ICON_PAUSE : ICON_PLAY;
+      // 播放/暂停切换时结算一次，别把暂停时长算进歌词进度
+      lyricHold = lyricNow();
+      lyricBase = lyricHold;
+      lyricAt = Date.now();
+      lastPlaying = playing;
+    }
+
+    if (typeof t.pos === "number" && t.dur > 0) {
+      progress.pos = t.pos;
+      progress.dur = t.dur;
+      progress.playing = playing;
+      drawProgress();
+    }
+
+    // 换歌才重置歌词缓存；同一次刷新的重复下发不用重建
+    if (Array.isArray(t.lines)) {
+      var first = t.lines[0];
+      var src = t.lines.length + ":" + (first ? first.s + first.t : "");
+      if (src !== lyricSourceSig) {
+        lyricSourceSig = src;
+        lyricLines = t.lines;
+        lyricCurIdx = -2;
+      }
+    }
+    syncClock(t);
+    drawLyric();
+  }
+
+  var lastSig = "";
+
+  function render(data) {
+    document.body.classList.toggle("dark", !!(data && data.dark));
+    list.innerHTML = "";
+    var rows = data && data.rows ? data.rows : [];
+    var inSub = !!(data && data.parent);
+
+    // 自绘菜单里我们自己加的区块也要能被精简
+    var parts = (data && data.parts) || {};
+    lyricAllowed = parts.lyric !== false;
+    npRow.classList.toggle("part-hidden", parts.nowCard === false);
+    progressEl.classList.toggle("part-hidden", parts.nowCard === false);
+    controlsEl.classList.toggle("part-hidden", parts.controls === false);
+    lyricSep.classList.toggle("part-hidden", parts.lyric === false);
+    if (!lyricAllowed) {
+      lyricBox.classList.add("hidden");
+      lyricShown = false;
+    }
+
+    // 只有菜单内容真的变了才重算窗口高度；播放状态更新不该反复 setSize
+    var sig = (inSub ? "SUB:" : "") + rows.map(function (r) {
+      return r.type === "separator" ? "-" : r.label;
+    }).join("|");
+    var changed = sig !== lastSig;
+    lastSig = sig;
+
+    now.classList.toggle("hidden", inSub);
+    nowSep.classList.toggle("hidden", inSub);
+    if (inSub) {
+      head.classList.remove("hidden");
+      headText.textContent = data.parent;
+    } else {
+      head.classList.add("hidden");
+    }
+    head.onclick = function () { api.back(); };
+
+    if (!rows.length) {
+      var empty = document.createElement("div");
+      empty.id = "empty";
+      empty.textContent = "菜单加载中…";
+      list.appendChild(empty);
+      if (changed) measure();
+      return;
+    }
+
+    rows.forEach(function (it) {
+      if (it.type === "separator") {
+        var sep = document.createElement("div");
+        sep.className = "sep";
+        list.appendChild(sep);
+        return;
+      }
+      var row = document.createElement("div");
+      row.className = "row" + (it.enabled ? "" : " disabled");
+
+      if (it.icon) {
+        var img = document.createElement("img");
+        img.src = it.icon;
+        row.appendChild(img);
+      } else {
+        var ph = document.createElement("span");
+        ph.className = "ph";
+        row.appendChild(ph);
+      }
+
+      var txt = document.createElement("span");
+      txt.className = "txt";
+      txt.textContent = it.label;
+      row.appendChild(txt);
+
+      var tail = document.createElement("span");
+      tail.className = "tail";
+      if (it.sub) tail.textContent = "›";
+      else if (it.checked) tail.textContent = "✓";
+      row.appendChild(tail);
+
+      if (it.enabled) {
+        row.addEventListener("click", function () {
+          if (it.sub) api.openSub(it.i, row.getBoundingClientRect().top);
+          else api.click(it.i);
+        });
+      }
+      list.appendChild(row);
+    });
+
+    drawLyric();
+    if (changed) measure();
+  }
+
+  // 独立二级窗口：收到数据播放滑入动画，返回时先播滑出动画再由主进程隐藏
+  api.onSub(function (d) {
+    var swap = document.body.classList.contains("sub-swap-out");
+    document.body.classList.remove("sub-out", "sub-in", "sub-swap-out", "sub-swap-in");
+    void card.offsetWidth;
+    document.body.classList.add(swap ? "sub-swap-in" : "sub-in");
+    render({ dark: d.dark, rows: d.rows, parent: d.parent, parts: {} });
+  });
+  api.onSubSwapOut(function () {
+    document.body.classList.remove("sub-in", "sub-swap-in", "sub-out");
+    void card.offsetWidth;
+    document.body.classList.add("sub-swap-out");
+  });
+  api.onSubOut(function () {
+    document.body.classList.remove("sub-in", "sub-swap-in", "sub-swap-out");
+    document.body.classList.add("sub-out");
+  });
+
+  var lyricPopBtn = document.getElementById("lyricPop");
+  lyricPopBtn.addEventListener("click", function (ev) {
+    ev.stopPropagation();
+    api.toggleLyric();
+  });
+  api.onLyricState(function (s) {
+    lyricPopBtn.classList.toggle("active", !!(s && s.open));
+    lyricPopBtn.title = s && s.open ? "收起歌词窗口" : "独立歌词窗口";
+  });
+
+  Array.prototype.forEach.call(document.querySelectorAll(".ctl"), function (b) {
+    b.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      api.control(b.getAttribute("data-k"));
+    });
+  });
+
+  api.onData(render);
+  api.onTrack(renderTrack);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") api.close();
+  });
+  document.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
+  api.ready();
+  measure();
+</script>
+</body>
+</html>

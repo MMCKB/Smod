@@ -1,0 +1,32 @@
+/* ============================================================
+   SPlayer-Next 首页播放栏 · 毛玻璃
+   改完数值后重新双击「一键安装.bat」即可
+   ============================================================ */
+
+/* ---- 1. 玻璃本体 ---- */
+div.fixed.bottom-0.z-50 > footer {
+  /* 填充：0.42 偏透 / 0.55 偏实 / 0.34 很透 */
+  background-color: rgb(var(--s-surface-panel) / 0.42) !important;
+
+  /* 模糊：越大越磨砂 */
+  backdrop-filter: blur(56px) saturate(190%);
+  -webkit-backdrop-filter: blur(56px) saturate(190%);
+
+  border-color: rgb(var(--s-on-surface) / 0.12) !important;
+
+  box-shadow:
+    0 12px 44px rgb(0 0 0 / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.60) !important;
+}
+html.dark div.fixed.bottom-0.z-50 > footer {
+  box-shadow:
+    0 12px 44px rgb(0 0 0 / 0.50),
+    inset 0 1px 0 rgb(255 255 255 / 0.10) !important;
+}
+
+/* ---- 2. 让内容滚到播放栏下面（可选）----
+   不加这三条，栏下方是空白背景，透出来只是页面底色。
+   不喜欢内容穿栏 → 删掉本节三条规则。 */
+div.flex-1.flex.flex-col.min-w-0.mb-20 { margin-bottom: 0 !important; }
+#app:has(div.flex-1.flex.flex-col.min-w-0.mb-20) aside.shrink-0 { margin-bottom: 0 !important; }
+main > div.h-full.overflow-y-auto { padding-bottom: 96px; }

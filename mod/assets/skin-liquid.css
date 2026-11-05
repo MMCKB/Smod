@@ -1,0 +1,37 @@
+/* ============================================================
+   SPlayer-Next 首页播放栏 · 液态玻璃（WebGL）
+   库：apple-liquid-glass-webgl 2.6.0 (MIT)
+       https://github.com/Oliverrr2424/webgl-apple-liquid-glass
+   ============================================================ */
+
+/* ---- 1. CSS 兜底 ----
+   如果这台机器的 WebGL2 起不来，库会自动降级，
+   元素上会打 data-liquid-glass="fallback"，此时就显示这层毛玻璃。 */
+div.fixed.bottom-0.z-50 > footer {
+  background-color: rgb(var(--s-surface-panel) / 0.42) !important;
+  backdrop-filter: blur(56px) saturate(190%);
+  -webkit-backdrop-filter: blur(56px) saturate(190%);
+  border-color: rgb(var(--s-on-surface) / 0.12) !important;
+  box-shadow:
+    0 12px 44px rgb(0 0 0 / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.60) !important;
+}
+html.dark div.fixed.bottom-0.z-50 > footer {
+  box-shadow:
+    0 12px 44px rgb(0 0 0 / 0.50),
+    inset 0 1px 0 rgb(255 255 255 / 0.10) !important;
+}
+
+/* ---- 2. WebGL 生效后撤掉 CSS 材质，交给 shader ---- */
+div.fixed.bottom-0.z-50 > footer[data-liquid-glass="webgl"] {
+  background-color: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  border-color: transparent !important;
+}
+
+/* ---- 3. 让内容从栏下经过（shader 要有东西可折射）---- */
+div.flex-1.flex.flex-col.min-w-0.mb-20 { margin-bottom: 0 !important; }
+#app:has(div.flex-1.flex.flex-col.min-w-0.mb-20) aside.shrink-0 { margin-bottom: 0 !important; }
+main > div.h-full.overflow-y-auto { padding-bottom: 96px; }

@@ -1,0 +1,36 @@
+SMod — SPlayer-Next 注入器（便携版）
+=====================================
+
+【要求】
+· Windows 10 / 11
+· 已安装 SPlayer-Next
+· 不需要安装 Node（用播放器自带的 Electron 运行时）
+
+【安装】
+1. 把整个 SMod 文件夹放到一个固定位置。
+   不要放桌面或临时目录——安装后快捷方式会指向这个路径，之后挪动要重新安装。
+2. 双击 install.cmd。
+3. 看到「完成」即可。以后双击桌面 / 开始菜单的 SPlayer Next 图标就是注入版。
+
+如果提示找不到 SPlayer-Next，把安装目录作为参数传进去：
+    install.cmd "D:\APP\SPlayer-Next"
+
+【使用】
+启动后打开 设置（右上角齿轮）→ 左侧「Mod 实验室」
+  · 外观主题：原版 / 毛玻璃 / 液态玻璃
+  · 首页精简：10 个开关，按区块标题隐藏
+
+【卸载】
+双击 uninstall.cmd，停止注入，快捷方式改成「直接启动」——点开还是正常打开播放器，
+只是不再加载 Mod 实验室。若安装时留有原始备份，会原样还原。
+
+【注意】
+· 必须从快捷方式启动。直接双击 SPlayer-Next.exe 不会注入。
+· 应用自动更新后会自己重启一次，那一次不带注入；再点一次图标就回来了。
+· 配置存在 %APPDATA%\SMod\settings.json，快捷方式备份在 %APPDATA%\SMod\shortcut-backup。
+· 不会修改 SPlayer-Next 安装目录里的任何文件。
+
+【出问题看这里】
+· 双击图标没反应：打开 %APPDATA%\SMod\launcher-boot.log 和 launcher.log
+· 设置里没有「Mod 实验室」：确认是从快捷方式启动的，且没有手动改过端口
+· 想彻底清干净：uninstall.cmd，然后删掉 %APPDATA%\SMod
