@@ -70,8 +70,24 @@
   }
 
   #progress { padding: 0 4px 9px; }
-  .bar { height: 3px; border-radius: 9999px; background: var(--m-sep); overflow: hidden; }
-  #barFill { height: 100%; width: 0; border-radius: 9999px; background: var(--m-fg); }
+  /* 轨道固定 7px 高，hover 时内部条变粗，不撑开菜单布局 */
+  .bar {
+    position: relative; height: 7px;
+    display: flex; align-items: center;
+    cursor: pointer; touch-action: none;
+  }
+  .bar::before {
+    content: ""; position: absolute; left: 0; right: 0;
+    height: 3px; border-radius: 9999px; background: var(--m-sep);
+    transition: height 0.14s ease;
+  }
+  #barFill {
+    position: relative; height: 3px; width: 0;
+    border-radius: 9999px; background: var(--m-fg);
+    transition: height 0.14s ease;
+  }
+  #progress:hover .bar::before { height: 6px; }
+  #progress:hover #barFill { height: 6px; }
   .times {
     display: flex; justify-content: space-between;
     margin-top: 4px; font-size: 10px; color: var(--m-sub);
@@ -159,14 +175,11 @@
   .lyric-row.tr.hidden { display: none; }
 
   /* 逐字填充：跟播放页一样按字的时间戳推进，用 background-clip 上色 */
+  /* 逐字点亮：每个字按自己的进度改透明度 */
   .ly-char {
-    background-image: linear-gradient(90deg,
-      var(--m-fg) 0%, var(--m-fg) var(--p, 0%),
-      var(--m-dim) var(--p, 0%), var(--m-dim) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
+    color: var(--m-fg);
+    opacity: calc(0.28 + 0.72 * var(--p, 0));
+    transition: opacity 0.06s linear;
   }
   @keyframes lyBump {
     from { transform: translateY(5px) scale(0.96); opacity: 0.55; }
@@ -290,6 +303,52 @@
   var nextBtn = document.querySelector('[data-k="next"]');
   var playIcon = document.getElementById("playIcon");
   var barFill = document.getElementById("barFill");
+  var barEl = document.querySelector("#progress .bar");
+  var draggingBar = false;
+  var dragRatio = 0;
+  var seekGuardUntil = 0;
+
+  function barRatio(ev) {
+    var r = barEl.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (ev.clientX - r.left) / Math.max(1, r.width)));
+  }
+
+  // 拖动时只改 UI，松手才真正 seek，避免一路拖一路发 IPC
+  function previewBar(p) {
+    barFill.style.width = (p * 100).toFixed(2) + "%";
+    if (progress.dur) tCur.textContent = fmt(p * progress.dur);
+  }
+
+  barEl.addEventListener("pointerdown", function (ev) {
+    if (!progress.dur) return;
+    draggingBar = true;
+    try { barEl.setPointerCapture(ev.pointerId); } catch (e) {}
+    dragRatio = barRatio(ev);
+    previewBar(dragRatio);
+  });
+  barEl.addEventListener("pointermove", function (ev) {
+    if (!draggingBar) return;
+    dragRatio = barRatio(ev);
+    previewBar(dragRatio);
+  });
+  barEl.addEventListener("pointerup", function (ev) {
+    if (!draggingBar) return;
+    draggingBar = false;
+    // 用最后一次 move 记录的比例，不重新读 pointerup 的坐标：
+    // 松手位置偶尔会落在条外（capture 失败或合成事件 clientX 为 0），
+    // 直接算会得到 0 或 1，表现就是「有时准、有时跳到开头/结尾」。
+    if (ev && ev.clientX > 0 && dragRatio === 0) dragRatio = barRatio(ev);
+    var p = Math.max(0, Math.min(1, dragRatio));
+    if (progress.dur) progress.pos = p * progress.dur;
+    drawProgress();
+    // 1.6 秒内不让外部采样覆盖本地进度：seek 是异步的，
+    // 这期间 refreshTrack 可能把旧位置读回来，条子就会「跳回去」
+    seekGuardUntil = Date.now() + 1600;
+    api.seek(p);
+  });
+  barEl.addEventListener("pointercancel", function () {
+    draggingBar = false;
+  });
   var tCur = document.getElementById("tCur");
   var tDur = document.getElementById("tDur");
   var npRow = document.querySelector(".np-row");
@@ -314,7 +373,15 @@
   }
 
   function drawProgress() {
-    if (!progress.dur) return;
+    if (draggingBar) return;
+    // 切歌瞬间 dur 会被清成 0，这时必须把条子归零，
+    // 否则它会停在上一首的 100% 不动
+    if (!progress.dur) {
+      barFill.style.width = "0%";
+      tCur.textContent = "0:00";
+      tDur.textContent = "0:00";
+      return;
+    }
     var pct = Math.min(100, Math.max(0, (progress.pos / progress.dur) * 100));
     barFill.style.width = pct.toFixed(2) + "%";
     tCur.textContent = fmt(progress.pos);
@@ -351,12 +418,32 @@
     return progress.playing ? lyricBase + (Date.now() - lyricAt) : lyricHold;
   }
 
+  var clockInit = false;
+
+  // 和独立歌词窗同一套：每秒的进度采样只做小幅校正，
+  // 硬重置会让当前行在边界上来回跳。
   function syncClock(t) {
     if (typeof t.posMs !== "number") return;
-    var ms = t.posMs + Math.max(0, Date.now() - (t.stamp || Date.now()));
-    lyricBase = ms;
-    lyricAt = Date.now();
-    lyricHold = ms;
+    var now = Date.now();
+    var target = t.posMs + Math.max(0, now - (t.stamp || now));
+
+    if (!progress.playing) {
+      lyricBase = target; lyricAt = now; lyricHold = target;
+      return;
+    }
+    if (!clockInit) {
+      clockInit = true;
+      lyricBase = target; lyricAt = now; lyricHold = target;
+      return;
+    }
+    var cur = lyricBase + (now - lyricAt);
+    var drift = target - cur;
+    if (Math.abs(drift) > 1200) {
+      lyricBase = target; lyricAt = now; lyricHold = target;
+    } else if (Math.abs(drift) > 60) {
+      lyricBase = cur + drift * 0.25;
+      lyricAt = now;
+    }
   }
 
   function buildCurSpans(line) {
@@ -384,16 +471,32 @@
         p = (ms - curLine.s) / (curLine.e - curLine.s);
       }
       p = Math.max(0, Math.min(1, p));
-      it.el.style.setProperty("--p", (p * 100).toFixed(1) + "%");
+      if (p < 0.05) p = 0;
+      it.el.style.setProperty("--p", p.toFixed(3));
     }
   }
 
   function drawLyric() {
-    if (!lyricLines.length || !lyricAllowed) {
+    if (!lyricAllowed) {
       if (lyricShown) {
         lyricBox.classList.add("hidden");
         lyricShown = false;
         measure();
+      }
+      return;
+    }
+    // 切歌瞬间歌词还没到：只清空文字、保留高度。
+    // 直接 hidden 会让菜单高度塌一下再撑回来，看起来像抖了一下。
+    if (!lyricLines.length) {
+      if (lyricShown) {
+        lyPrev.textContent = "";
+        lyCur.textContent = "";
+        lyNext.textContent = "";
+        lyTr.textContent = "";
+        lyTr.classList.add("hidden");
+        lyricTrShown = false;
+        curSpans = [];
+        lyricCurIdx = -2;
       }
       return;
     }
@@ -480,7 +583,13 @@
     }
 
     if (typeof t.pos === "number" && t.dur > 0) {
-      progress.pos = t.pos;
+      if (Date.now() > seekGuardUntil) {
+        // posMs 是采样时刻的位置，按 stamp 差值推进到"现在"，
+        // 否则两次采样之间进度会落后最多 1 秒
+        progress.pos = typeof t.posMs === "number"
+          ? (t.posMs + Math.max(0, Date.now() - (t.stamp || Date.now()))) / 1000
+          : t.pos;
+      }
       progress.dur = t.dur;
       progress.playing = playing;
       drawProgress();

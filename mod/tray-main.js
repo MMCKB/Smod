@@ -75,17 +75,32 @@
       var parts = Array.isArray(raw.trayParts) ? raw.trayParts : [];
       var subPopup = raw.traySubPopup !== false;
       var lyricSize = Math.max(-6, Math.min(12, Number(raw.trayLyricSize) || 0));
+      var lyricWidth = Math.max(-60, Math.min(200, Number(raw.trayLyricWidth) || 0));
+      var lyricReverse = raw.trayLyricReverse === true;
+      var fftOn = raw.trayFftOn !== false;
+      var fftWidth = Math.max(40, Math.min(100, Number(raw.trayFftWidth) || 100));
+      var fftReverse = raw.trayFftReverse === true;
       return {
         enabled: raw.trayEnabled !== false,
         hidden: hidden,
         parts: parts,
         subPopup: subPopup,
         lyricSize: lyricSize,
+        lyricWidth: lyricWidth,
+        lyricReverse: lyricReverse,
+        fftOn: fftOn,
+        fftWidth: fftWidth,
+        fftReverse: fftReverse,
         sig: [
           hidden.slice().sort().join(","),
           parts.slice().sort().join(","),
           subPopup ? "1" : "0",
           String(lyricSize),
+          String(lyricWidth),
+          lyricReverse ? "1" : "0",
+          fftOn ? "1" : "0",
+          String(fftWidth),
+          fftReverse ? "1" : "0",
         ].join("|"),
       };
     } catch (err) {
@@ -224,53 +239,36 @@
   }
 
   function onBlurCheck() {
+    // 只记录，不关闭。
+    // blur 分不清「鼠标移出菜单」「系统抢焦点」「真的点了外面」，
+    // 只要拿它当关闭条件，迟早会出现「鼠标一移出菜单就消失」。
+    // 关闭交给：Esc、点菜单项、点托盘图标、主窗口获得焦点。
     S.blurHits = (S.blurHits || 0) + 1;
-    // 关键：要记 blur「发生那一刻」的鼠标位置，而不是 120ms 之后。
-    // 之前用延迟后的位置判定，鼠标一移出菜单就会被误判成点外面。
-    var pt = null;
-    try {
-      pt = e.screen.getCursorScreenPoint();
-    } catch (err) {}
-
     logTray("blur", {
-      pt: pt,
       focused: (function () {
         try {
           var w = e.BrowserWindow.getFocusedWindow();
           return w ? String(w.getTitle() || "?") : null;
         } catch (err) { return "err"; }
       })(),
-      winBounds: S.win && !S.win.isDestroyed() ? S.win.getBounds() : null,
+      winVisible: !!(S.win && !S.win.isDestroyed() && S.win.isVisible()),
     });
+  }
 
-    setTimeout(function () {
+  // 点播放器主窗口时收起菜单。主窗口拿到焦点是可靠信号，
+  // 不像 blur 那样被鼠标移动干扰。
+  function bindMainFocus() {
+    var mw = findMainWindow();
+    if (!mw || mw.isDestroyed()) return;
+    if (S.mainFocusBound === mw.id) return;
+    S.mainFocusBound = mw.id;
+    mw.on("focus", function () {
       if (!S.win || S.win.isDestroyed() || !S.win.isVisible()) return;
-      S.blurChecks = (S.blurChecks || 0) + 1;
-      // 子窗口隐藏时自身也会 blur，此刻焦点还没回到主窗口。
-      // 没有这段保护，返回二级页会把整个菜单一起关掉。
-      if (Date.now() - S.subClosingAt < 600) return;
-      // 菜单自己的 show() 前后常有一次性失焦，窗口显示后短暂忽略
-      if (Date.now() - S.shownAt < 700) return;
-
-      // blur 发生时鼠标就停在某个菜单窗口里 → 这是窗口内部操作引起的失焦，
-      // 不是「点了外面」，不该关
-      if (pt && (insideWin(S.win, pt) || insideWin(S.subWin, pt) || insideWin(S.lyricWin, pt))) {
-        return;
-      }
-
-      // 窗口刚被移动/重排过，这一轮失焦多半是移动本身引起的，忽略
-      if (Date.now() - S.lastPlaceAt < 350) return;
-
-      var f = e.BrowserWindow.getFocusedWindow();
-      // f 为 null 表示焦点在桌面/任务栏，鼠标移出菜单就常是这种情况。
-      // 这种情况不改状态——否则「鼠标一移出去菜单就没了」。
-      // 真正点开别的应用时 f 会是那个窗口，仍然照常关闭。
-      if (!f) return;
-      if (f === S.win) return;
-      if (S.subWin && !S.subWin.isDestroyed() && f === S.subWin) return;
-      if (S.lyricWin && !S.lyricWin.isDestroyed() && f === S.lyricWin) return;
-      hideMenu("blur");
-    }, 120);
+      // 点托盘唤起菜单时，主窗口有时会跟着拿到焦点，
+      // 400ms 太短会把刚弹出的菜单立刻关掉，看起来就是「唤不起来」
+      if (Date.now() - S.shownAt < 1000) return;
+      hideMenu("main-focus");
+    });
   }
 
   function ensureSubWindow() {
@@ -407,7 +405,7 @@
       y: b.y + b.height / 2,
     });
     var wa = d.workArea;
-    // 和托盘菜单完全同尺寸，只错开 8px
+    // 和托盘菜单同尺寸，只错开 8px
     var w = b.width;
     var h = b.height;
     var x = b.x + w + 8;
@@ -424,10 +422,15 @@
 
   function sendLyric() {
     if (!S.lyricWin || S.lyricWin.isDestroyed() || !S.lyricLoaded) return;
+    var ts = readTraySettings();
     S.lyricWin.webContents.send("smod:tray:lyric", {
       track: S.track,
       dark: e.nativeTheme.shouldUseDarkColors,
-      sizeOffset: readTraySettings().lyricSize,
+      sizeOffset: ts.lyricSize,
+      reverse: ts.lyricReverse,
+      fftOn: ts.fftOn,
+      fftWidth: ts.fftWidth,
+      fftReverse: ts.fftReverse,
     });
   }
 
@@ -437,11 +440,42 @@
     }
   }
 
+  // 歌词窗口在独立进程，拿不到播放器的 FFT，只能主进程定时取一次转发过去。
+  // 只在歌词窗可见时才轮询。
+  function startFftFeed() {
+    if (S.fftTimer) return;
+    // 应用默认不跑 FFT（省性能），不开这个开关 getFftData 永远返回全 0
+    (function () {
+      var mw = findMainWindow();
+      if (!mw) return;
+      mw.webContents
+        .executeJavaScript("try{window.api.player.setFftEnabled(true)}catch(e){}")
+        .catch(function () {});
+    })();
+    S.fftTimer = setInterval(function () {
+      if (!S.lyricOpen || !S.lyricWin || S.lyricWin.isDestroyed()) return;
+      var mw = findMainWindow();
+      if (!mw) return;
+      mw.webContents
+        .executeJavaScript(
+          "(async()=>{try{var f=await window.api.player.getFftData();return f&&f.data?f.data:null}catch(e){return null}})()"
+        )
+        .then(function (d) {
+          if (d && S.lyricWin && !S.lyricWin.isDestroyed()) {
+            S.lyricWin.webContents.send("smod:tray:fft", d);
+          }
+        })
+        .catch(function () {});
+    }, 110);
+  }
+
   function openLyric() {
     if (!S.win || S.win.isDestroyed()) return;
     S.lyricOpen = true;
     notifyLyricState();
     var win = ensureLyricWindow();
+    startFftFeed();
+    readLyricColor();
     var go = function () {
       placeLyric();
       sendLyric();
@@ -562,6 +596,27 @@
     }
   }
 
+  // 托盘窗口直接 <img src="http://..."> 会加载失败（跨进程/证书/混合内容），
+  // 主进程把图片拉下来转 data URL 再发
+  function fetchCoverDataUrl(url) {
+    return new Promise(function (resolve) {
+      try {
+        var mod = /^https:/i.test(url) ? req("https") : req("http");
+        mod.get(url, { timeout: 6000 }, function (res) {
+          var chunks = [];
+          res.on("data", function (c) { chunks.push(c); });
+          res.on("end", function () {
+            try {
+              var buf = Buffer.concat(chunks);
+              var ct = res.headers["content-type"] || "image/jpeg";
+              resolve("data:" + ct + ";base64," + buf.toString("base64"));
+            } catch (e) { resolve(""); }
+          });
+        }).on("error", function () { resolve(""); });
+      } catch (e) { resolve(""); }
+    });
+  }
+
   function sendTrack() {
     if (S.win && !S.win.isDestroyed()) {
       S.win.webContents.send("smod:tray:track", S.track);
@@ -574,14 +629,69 @@
     }
   }
 
+  // 颜色单独读：refreshTrack 里那段读颜色的代码在 cover 请求忙的时候会被跳过，
+  // 结果歌词窗一直拿不到当前曲目的颜色
+  function readLyricColor() {
+    var mw = findMainWindow();
+    if (!mw) return;
+    mw.webContents
+      .executeJavaScript(
+        "(function(){var el=document.querySelector('.lp-line.active .lp-main')||document.querySelector('.lp-main')||document.querySelector('.player-panel');" +
+          "return el?getComputedStyle(el).getPropertyValue('--lp-color').trim():''})()"
+      )
+      .then(function (c) {
+        if (c && c !== S.track.color) {
+          S.track.color = c;
+          sendTrack();
+          if (S.lyricOpen) sendLyric();
+        }
+      })
+      .catch(function () {});
+  }
+
+  // 菜单开着时持续采样真实进度。之前只靠渲染层每秒 +1 推算，
+  // 缓冲、暂停、拖动、切歌后必然和软件不同步。
+  function refreshProgress() {
+    if (Date.now() < (S.seekGuardUntil || 0)) return;
+    var mw = findMainWindow();
+    if (!mw) return;
+    mw.webContents
+      .executeJavaScript("window.api.player.getStatus()")
+      .then(function (st) {
+        var pos = st && st.data && st.data.position;
+        if (typeof pos !== "number" || pos < 0) return;
+        if (Date.now() < (S.seekGuardUntil || 0)) return;
+        S.track.posMs = pos;
+        S.track.pos = pos / 1000;
+        S.track.stamp = Date.now();
+        sendTrack();
+      })
+      .catch(function () {});
+  }
+
   function refreshTrack() {
     var mw = findMainWindow();
+    readLyricColor();
     if (!mw) return;
 
     // 应用把「歌名 - 歌手」写进主窗口标题（setTraySongName 同一个 header）
     var header = String(mw.getTitle() || "");
     var at = header.indexOf(" - ");
-    S.track.title = at > 0 ? header.slice(0, at) : header;
+    var newTitle = at > 0 ? header.slice(0, at) : header;
+
+    // 切歌：标题是同步拿到的，歌词要等下面那次异步请求。
+    // 不先把上一首的歌词清掉，新标题就会配着旧歌词显示一秒。
+    if (S.track.title && newTitle !== S.track.title) {
+      S.track.lines = [];
+      S.track.posMs = 0;
+      S.track.pos = 0;
+      S.track.dur = 0;
+      S.track.cover = "";      // 不清的话会一直显示上一首的封面
+      S.lastCoverSrc = "";
+      S.track.stamp = Date.now();
+      S.coverBusy = false;
+    }
+    S.track.title = newTitle;
     S.track.artist = at > 0 ? header.slice(at + 3) : "";
 
     var play = findControl("play");
@@ -615,7 +725,10 @@
           "var m=t.match(/(\\d+):(\\d+)\\s*\\/\\s*(\\d+):(\\d+)/);" +
           "var o={cover:i?(i.currentSrc||i.src||''):''," +
           "pos:m?(+m[1]*60 + +m[2]):null," +
-          "dur:m?(+m[3]*60 + +m[4]):null,lines:null};" +
+          "dur:m?(+m[3]*60 + +m[4]):null,lines:null,color:''};" +
+          // 歌词颜色来自播放页的 --lp-color（按封面取色，每首歌不同）
+          "var lp=document.querySelector('.lp-line.active .lp-main')||document.querySelector('.lp-main')||document.querySelector('.player-panel');" +
+          "if(lp)o.color=getComputedStyle(lp).getPropertyValue('--lp-color').trim();" +
           "try{" +
             // 逐字歌词时间轴；加超时，免得接口挂起把整个 refresh 拖死
             "var s=await Promise.race([" +
@@ -647,11 +760,22 @@
         }
         var src = info.cover || "";
         if (src && src !== S.lastCoverSrc) {
+          var coverSrc = src;
           S.lastCoverSrc = src;
-          S.track.cover = coverToDataUrl(src);
+          if (/^https?:/i.test(src)) {
+            fetchCoverDataUrl(src).then(function (d) {
+              if (!d || S.lastCoverSrc !== coverSrc) return;
+              S.track.cover = d;
+              sendTrack();
+            });
+          } else {
+            S.track.cover = coverToDataUrl(src);
+          }
         }
         // 歌词时间轴 + 毫秒基准一起下发；菜单窗口自己推进，不逐帧跨进程取
         if (info.lines) S.track.lines = info.lines;
+        // 读不到（播放页没开过）就保留上一次的颜色，别把已有颜色清空
+        if (info.color) S.track.color = info.color;
         if (typeof info.posMs === "number") {
           S.track.posMs = info.posMs;
           S.track.stamp = info.stamp || Date.now();
@@ -770,7 +894,12 @@
       refreshTrack();
       place(win);
       S.shownAt = Date.now();
+      bindMainFocus();
       win.show();
+      // show() 对已经显示的窗口是空操作，不会把窗口提到最前。
+      // 有时菜单被压在别的窗口下面，看起来就是「唤不起来」。
+      win.setAlwaysOnTop(true, "pop-up-menu");
+      win.moveTop();
       win.focus();
       notifyLyricState();
     };
@@ -879,6 +1008,30 @@
       fn();
     }
   });
+  e.ipcMain.on("smod:tray:seek", function (ev, ratio) {
+    if (!S.win || S.win.isDestroyed() || ev.sender !== S.win.webContents) return;
+    var dur = S.track.dur || 0;
+    if (!dur) return;
+    var r = Math.max(0, Math.min(1, Number(ratio) || 0));
+    var mw = findMainWindow();
+    if (!mw) return;
+    mw.webContents
+      // player.seek 的参数是毫秒，不是秒（实测 seek(30000) 跳到 30 秒）
+      .executeJavaScript(
+        (logTray("seek", { ratio: Number(r.toFixed(3)), dur: dur, ms: Math.round(r * dur * 1000) }),
+         "window.api.player.seek(" + Math.round(r * dur * 1000) + ")")
+      )
+      .then(function () {
+        // 三个字段都要更新：posMs 给歌词时钟，pos 给进度条（秒），
+        // 只改 posMs 的话，下一次 sendData 会用旧的 pos 把条子拉回去
+        S.track.posMs = r * dur * 1000;
+        S.track.pos = r * dur;
+        S.track.stamp = Date.now();
+        S.seekGuardUntil = Date.now() + 1600;
+        sendTrack();
+      })
+      .catch(function () {});
+  });
   e.ipcMain.on("smod:tray:toggleLyric", function () {
     toggleLyric();
   });
@@ -906,11 +1059,15 @@
   S.lastTraySig = initTray.sig;
   setInterval(function () {
     var ts = readTraySettings();
+    // 菜单可见时每秒对齐一次真实播放位置
+    if (S.win && !S.win.isDestroyed() && S.win.isVisible()) refreshProgress();
     if (ts.enabled && !S.taken) S.takeOver();
     else if (!ts.enabled && S.taken) S.restore();
     // 精简项改了，菜单开着也要立刻刷新
     if (ts.sig !== S.lastTraySig) {
       S.lastTraySig = ts.sig;
+      // 频谱宽度/反向改了要立刻推给已打开的歌词窗
+      if (S.lyricOpen && S.lyricWin && !S.lyricWin.isDestroyed()) sendLyric();
       // 关掉独立弹窗开关时，已经弹出的二级窗口立刻收起
       if (!ts.subPopup && S.subWin && !S.subWin.isDestroyed() && S.subWin.isVisible()) {
         S.subWin.hide();

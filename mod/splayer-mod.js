@@ -79,7 +79,7 @@
   // 跳过桌面歌词 / 灵动岛这些独立窗口；主窗口在暂停期可能还是空路径，不能按白名单挡
   if (/\/windows\//i.test(location.pathname)) return;
 
-  var VERSION = "0.3.0";
+  var VERSION = "0.2.0";
   var MENU_KEY = "smod-lab";
   var LABEL = "Mod 实验室";
   var STORE_KEY = "smod.settings.v2";
@@ -207,6 +207,13 @@
     trayParts: [],
     traySubPopup: true,
     trayLyricSize: 0,
+    trayLyricWidth: 0,
+    trayLyricReverse: false,
+    trayFftOn: true,
+    trayFftWidth: 100,
+    trayFftReverse: false,
+    lyricRing: true,
+    lyricRain: true,
     taskbarLyric: { x: 0, y: 0, showCover: true },
   };
   var memoryStore = null;
@@ -235,6 +242,13 @@
       trayParts: Array.isArray(s.trayParts) ? s.trayParts.slice() : [],
       traySubPopup: s.traySubPopup !== false,
       trayLyricSize: Math.max(-6, Math.min(12, Number(s.trayLyricSize) || 0)),
+      trayLyricWidth: Math.max(-60, Math.min(200, Number(s.trayLyricWidth) || 0)),
+      trayLyricReverse: s.trayLyricReverse === true,
+      trayFftOn: s.trayFftOn !== false,
+      trayFftWidth: Math.max(40, Math.min(100, Number(s.trayFftWidth) || 100)),
+      trayFftReverse: s.trayFftReverse === true,
+      lyricRing: s.lyricRing !== false,
+      lyricRain: s.lyricRain !== false,
       lyricStars: s.lyricStars !== false,
       taskbarLyric: {
         x: Math.max(-400, Math.min(400, Number(s.taskbarLyric && s.taskbarLyric.x) || 0)),
@@ -336,14 +350,53 @@
 
   /* ------------------------------------------------------------ 原生外观 */
 
-  function section(title) {
-    var box = h("div", "mb-8 last:mb-0");
-    var head = h("h3", "flex items-center gap-2 text-lg font-semibold text-on-surface mb-3 px-1");
-    head.appendChild(h("span", "w-0.75 h-4 rounded-full bg-primary"));
-    head.appendChild(document.createTextNode(" " + title));
-    var list = h("div", "flex flex-col gap-2.5");
+  function section(title, badge) {
+    var box = h("div", "mb-3 last:mb-0");
+    // 收起时也是一张完整卡片，和展开后的 row 用同一套外观
+    var head = h(
+      "button",
+      "w-full flex items-center justify-between gap-4 rounded-xl bg-surface-panel border border-solid border-outline-variant/15 px-4 py-3 cursor-pointer text-left transition-colors hover:bg-on-surface/5"
+    );
+    head.type = "button";
+    var left = h("div", "flex items-center gap-3 min-w-0 flex-1");
+    var badge = h(
+      "div",
+      "size-10 rounded-xl bg-on-surface/6 flex items-center justify-center text-on-surface-variant shrink-0"
+    );
+    badge.appendChild(icon(ICON_LAYOUT));
+    left.appendChild(badge);
+    left.appendChild(h("span", "text-base truncate", title));
+    head.appendChild(left);
+    var chev = h(
+      "span",
+      "shrink-0 text-on-surface-variant/60 text-sm transition-transform duration-200",
+      "▸"
+    );
+    var right = h("div", "flex items-center gap-2 shrink-0");
+    if (badge) right.appendChild(badge);
+    right.appendChild(chev);
+    head.appendChild(right);
+    // grid-template-rows: 0fr → 1fr 可以做高度过渡，不用手动测 scrollHeight，
+    // 展开后往里加行也不会被固定 max-height 裁掉
+    var wrap = h("div", "");
+    wrap.style.cssText =
+      "display:grid;grid-template-rows:0fr;opacity:0;" +
+      "transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1),opacity .25s ease";
+    var inner = h("div", "");
+    inner.style.cssText = "overflow:hidden;min-height:0";
+    var list = h("div", "flex flex-col gap-2.5 mt-2");
+    inner.appendChild(list);
+    wrap.appendChild(inner);
+
+    var open = false;
+    head.addEventListener("click", function () {
+      open = !open;
+      wrap.style.gridTemplateRows = open ? "1fr" : "0fr";
+      wrap.style.opacity = open ? "1" : "0";
+      chev.style.transform = open ? "rotate(90deg)" : "";
+    });
     box.appendChild(head);
-    box.appendChild(list);
+    box.appendChild(wrap);
     return { root: box, list: list };
   }
 
@@ -1149,7 +1202,7 @@
   };
 
   function lfxEnabled() {
-    return state.lyricStars !== false;
+    return state.lyricStars !== false || state.lyricRain !== false;
   }
 
   function lfxAccent() {
@@ -1177,6 +1230,11 @@
   function lfxPull() {
     try {
       if (!window.api || !window.api.player || !window.api.player.getFftData) return;
+      // 应用默认不跑 FFT，不打开这个开关拿到的永远是全 0
+      if (!lfx.fftOn && window.api.player.setFftEnabled) {
+        lfx.fftOn = true;
+        try { window.api.player.setFftEnabled(true); } catch (e) {}
+      }
       Promise.resolve(window.api.player.getFftData())
         .then(function (r) {
           var d = r && r.data;
@@ -1244,7 +1302,40 @@
     var c = lfxAccent();
 
     ctx.clearRect(0, 0, w, h);
-    for (var i = 0; i < lfx.stars.length; i++) {
+
+    if (state.lyricRain === false) lfx.rain = null;
+    if (state.lyricRain !== false && !lfx.rain) {
+      lfx.rain = [];
+      lfx.rainAcc = 0;
+      lfx.rainLast = ts;
+    }
+    if (state.lyricRain === false) {
+      lfx.rainLast = ts;
+    }
+    var rdt = Math.min(60, ts - (lfx.rainLast || ts));
+    lfx.rainLast = ts;
+    lfx.rainAcc += rdt;
+    while (lfx.rainAcc >= 50) {
+      lfx.rainAcc -= 50;
+      lfx.rain.push({ x: Math.random() * w, y: -60, sp: 0 });
+    }
+    for (var ri = lfx.rain ? lfx.rain.length - 1 : -1; ri >= 0; ri--) {
+      var drop = lfx.rain[ri];
+      drop.sp += rdt * 0.06;
+      drop.y += drop.sp * rdt * 0.06;
+      if (drop.y > h + 60) {
+        lfx.rain.splice(ri, 1);
+        continue;
+      }
+      // 2px 宽、60px 长的白色渐变条
+      var g = ctx.createLinearGradient(drop.x, drop.y, drop.x, drop.y + 60);
+      g.addColorStop(0, "rgba(255,255,255,0.02)");
+      g.addColorStop(1, "rgba(255,255,255,0.22)");
+      ctx.fillStyle = g;
+      ctx.fillRect(drop.x, drop.y, 2, 60);
+    }
+
+    for (var i = 0; state.lyricStars !== false && i < lfx.stars.length; i++) {
       var s = lfx.stars[i];
       s.x += s.vx;
       s.y += s.vy * (1 + lv * 2.6);
@@ -2567,6 +2658,24 @@
 
       var sTb = section("任务栏歌词");
 
+      var rangeCtl = function (get, set, min, max, step) {
+        var wrap = h("div", "flex items-center gap-2");
+        var inp = document.createElement("input");
+        inp.type = "range";
+        inp.min = String(min); inp.max = String(max);
+        inp.step = String(step || 1); inp.value = String(get());
+        inp.style.cssText = "width:104px;accent-color:var(--s-primary,#888);cursor:pointer";
+        var val = h("span", "text-sm text-on-surface-variant w-9 text-right", String(get()));
+        inp.addEventListener("input", function () {
+          set(Number(inp.value));
+          val.textContent = inp.value;
+          persist();
+        });
+        wrap.appendChild(inp);
+        wrap.appendChild(val);
+        return wrap;
+      };
+
       var tbStepCtl = function (get, set, min, max) {
         var wrap = h("div", "flex items-center gap-1");
         var input = document.createElement("input");
@@ -2690,6 +2799,38 @@
       sTray.list.appendChild(
         row({
           icon: ICON_LAYOUT,
+          label: "歌词频谱",
+          desc: "独立歌词窗底部的实时频谱",
+          control: switchControl(state.trayFftOn !== false, function (v) {
+            state.trayFftOn = v;
+          }),
+        })
+      );
+      sTray.list.appendChild(
+        row({
+          icon: ICON_LAYOUT,
+          label: "频谱宽度",
+          desc: "频谱占歌词窗宽度的百分比",
+          control: rangeCtl(
+            function () { return state.trayFftWidth || 100; },
+            function (v) { state.trayFftWidth = v; },
+            40, 100, 5
+          ),
+        })
+      );
+      sTray.list.appendChild(
+        row({
+          icon: ICON_LAYOUT,
+          label: "频谱反向",
+          desc: "低频画到右边，和软件内歌词页的频谱设置对应",
+          control: switchControl(state.trayFftReverse === true, function (v) {
+            state.trayFftReverse = v;
+          }),
+        })
+      );
+      sTray.list.appendChild(
+        row({
+          icon: ICON_LAYOUT,
           label: "歌词字号",
           desc: "独立歌词窗口的字号偏移，0 = 跟随窗口自适应",
           control: tbStepCtl(
@@ -2714,6 +2855,29 @@
       root.appendChild(sTray.root);
 
       var sLyricFx = section("歌词氛围");
+      sLyricFx.list.appendChild(
+        row({
+          icon: ICON_LAYOUT,
+          label: "粒子",
+          desc: "歌词区的漂浮光点",
+          control: switchControl(state.lyricStars !== false, function (v) {
+            state.lyricStars = v;
+            persist();
+          }),
+        })
+      );
+      sLyricFx.list.appendChild(
+        row({
+          icon: ICON_LAYOUT,
+          label: "雨滴",
+          desc: "歌词区的下落雨丝",
+          control: switchControl(state.lyricRain !== false, function (v) {
+            state.lyricRain = v;
+            persist();
+          }),
+        })
+      );
+
       sLyricFx.list.appendChild(
         row({
           icon: ICON_SPARKLE,
@@ -2820,7 +2984,115 @@
       );
       root.appendChild(s3.root);
 
-      var s4 = section("关于");
+      // 与 GitHub Release 的 tag 对齐（v0.2.0），放在「关于」标题右侧
+      var verBadge = h(
+        "span",
+        "text-xs font-mono px-2.5 py-1 rounded-full bg-primary/10 text-primary whitespace-nowrap",
+        "v0.2.0"
+      );
+      verBadge.style.pointerEvents = "none";
+      var s4 = section("关于", verBadge);
+
+      // 与「设置 → 关于软件」同款卡片。
+      // 注意：这里用 div 而不是 <a> —— 应用全局的 a 样式会给链接染蓝加下划线，
+      // 而注入脚本里的 Tailwind 工具类（no-underline 等）没编译进应用的 CSS。
+      var GITHUB_PATH =
+        '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5c.08-1.25-.27-2.48-1-3.5c.28-1.15.28-2.35 0-3.5c0 0-1 0-3 1.5c-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5c-.39.49-.68 1.05-.85 1.65S8.93 17.38 9 18v4"/>' +
+        '<path d="M9 18c-4.51 2-5-2-7-2"/>';
+      var ARROW_PATH = '<path d="M7 17 17 7M9 7h8v8"/>';
+
+      var subHead = function (text) {
+        var t = h(
+          "div",
+          "flex items-center gap-2 text-sm font-medium text-on-surface-variant/80 px-1 mt-1 mb-2"
+        );
+        t.appendChild(h("span", "w-0.75 h-3 rounded-full bg-primary/70"));
+        t.appendChild(document.createTextNode(text));
+        return t;
+      };
+
+      var cardShell = function (url, small) {
+        var card = h(
+          "div",
+          "group text-left min-w-0 flex items-center gap-2.5 cursor-pointer " +
+            "transition-[background-color,border-color,box-shadow] duration-200 " +
+            "bg-surface-panel dark:bg-on-surface/5 rounded-lg " +
+            (small ? "px-3 py-2" : "px-4 py-3") + " hover:shadow-md"
+        );
+        card.setAttribute("role", "button");
+        card.tabIndex = 0;
+        // 内联兜底，不依赖未编译的工具类
+        card.style.textDecoration = "none";
+        card.style.color = "inherit";
+        var open = function () {
+          window.open(url, "_blank", "noopener,noreferrer");
+        };
+        card.addEventListener("click", open);
+        card.addEventListener("keydown", function (e) {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            open();
+          }
+        });
+        return card;
+      };
+
+      // 关于分两个区：开发人员 / 项目地址，各自独占一行
+      var devGrid = h("div", "flex flex-col gap-2.5");
+      var repoGrid = h("div", "flex flex-col gap-2.5");
+
+      // 开发人员：头像随项目分发（A.avatar 是 data URL），不联网下载
+      var devCard = cardShell("https://github.com/MMCKB", true);
+      var av = h(
+        "div",
+        "relative size-9 rounded-full shrink-0 overflow-hidden bg-on-surface/6 flex items-center justify-center text-sm font-medium text-on-surface-variant"
+      );
+      if (!A.avatar) av.appendChild(document.createTextNode("M"));
+      if (A.avatar) {
+        var avImg = document.createElement("img");
+        avImg.src = A.avatar;
+        avImg.alt = "MMCKB";
+        avImg.className = "absolute inset-0 size-9 rounded-full object-cover";
+        // 内联兜底：这些工具类若没编译进应用 CSS，头像会挤开占位字母
+        avImg.style.cssText =
+          "position:absolute;top:0;left:0;width:100%;height:100%;border-radius:9999px;object-fit:cover";
+        av.appendChild(avImg);
+      }
+      devCard.appendChild(av);
+      var devText = h("div", "min-w-0 flex-1");
+      devText.appendChild(h("div", "text-sm font-medium text-on-surface truncate", "MMCKB"));
+      devText.appendChild(
+        h("div", "text-xs text-on-surface-variant/60 truncate mt-0.5", "SMod 开发者")
+      );
+      devCard.appendChild(devText);
+      devGrid.appendChild(devCard);
+
+      // 项目地址：左侧 GitHub 线条图标 + 名称/描述 + 右上箭头
+      var repoCard = cardShell("https://github.com/MMCKB/Smod", false);
+      var ghIcon = h(
+        "div",
+        "size-9 rounded-full flex items-center justify-center bg-on-surface/6 text-on-surface-variant"
+      );
+      ghIcon.appendChild(icon(GITHUB_PATH, "size-4.5"));
+      repoCard.appendChild(ghIcon);
+      var repoText = h("div", "min-w-0 flex-1");
+      var repoLine = h("div", "flex items-center gap-1.5");
+      repoLine.appendChild(h("span", "text-sm font-medium text-on-surface truncate", "SMod"));
+      repoLine.appendChild(
+        icon(ARROW_PATH, "size-3.5 text-on-surface-variant/40 group-hover:text-primary transition-colors")
+      );
+      repoText.appendChild(repoLine);
+      repoText.appendChild(
+        h("div", "text-xs text-on-surface-variant/70 mt-0.5 line-clamp-1", "github.com/MMCKB/Smod · AGPL-3.0")
+      );
+      repoCard.appendChild(repoText);
+      repoGrid.appendChild(repoCard);
+
+      s4.list.appendChild(subHead("开发人员"));
+      s4.list.appendChild(devGrid);
+      s4.list.appendChild(subHead("项目地址"));
+      s4.list.appendChild(repoGrid);
+
       var note = h(
         "div",
         "rounded-xl bg-surface-panel border border-solid border-outline-variant/15 px-4 py-3.5 text-sm text-on-surface-variant/80 leading-relaxed"
@@ -3125,9 +3397,18 @@
     item.dataset.state = "closed";
     item.setAttribute("data-menu-key", MENU_KEY);
     item.appendChild(icon('<path d="M10 2v7.31"/><path d="M14 9.3V1.99"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/><path d="M5.52 16h12.96"/>'));
-    item.appendChild(
-      h("span", "flex-1 min-w-0 truncate transition-opacity duration-300 opacity-100", LABEL)
+    var labelWrap = h("div", "flex items-center gap-1.5 min-w-0 flex-1");
+    labelWrap.appendChild(
+      h("span", "min-w-0 truncate transition-opacity duration-300 opacity-100", LABEL)
     );
+    labelWrap.appendChild(
+      h(
+        "span",
+        "shrink-0 text-[10px] leading-none px-1.5 py-1 rounded-md bg-primary/10 text-primary font-medium",
+        "注入"
+      )
+    );
+    item.appendChild(labelWrap);
 
     var panel = buildPanel(dialog);
     rowHost.appendChild(panel);
@@ -3215,6 +3496,12 @@
     setTimeout(function () {
       pending = false;
       try {
+        // HMR 会把 Vue 组件树整棵换掉，注入的样式层和播放器装饰跟着消失。
+        // schedule 以前只重放隐藏项 / 视频背景 / 设置入口，boot 里的
+        // applySkin + applyPlayerChrome 只跑一次，所以热重载后主界面全裸。
+        // 这两个函数都是幂等的（样式标签有则更新、无则创建）。
+        applySkin(state.skin, true);
+        applyPlayerChrome();
         applyHide();
         applyStatsHide();
         applyVideoBg();

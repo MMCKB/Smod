@@ -5,6 +5,7 @@
 <title>SMod Tray Lyric</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root { --lyric: rgb(248 215 192); }
   html, body {
     width: 100%; height: 100%;
     background: transparent; overflow: hidden;
@@ -38,7 +39,7 @@
   #content {
     position: relative; z-index: 2;
     width: 100%; height: 100%;
-    padding: 14px 12px;
+    padding: 14px 12px 42px;
     display: flex; flex-direction: column;
   }
   #meta { text-align: center; flex: 0 0 auto; margin-bottom: 6px; }
@@ -66,7 +67,9 @@
   .lrow {
     height: 1.58em; line-height: 1.58em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    color: rgba(248, 215, 192, 0.95);
+    color: var(--lyric);
+    /* 颜色严格跟播放页一致，可读性靠阴影补，不掺白改色 */
+    text-shadow: 0 1px 10px rgba(0, 0, 0, 0.42);
     transition: opacity 0.22s ease, filter 0.22s ease, transform 0.22s ease;
   }
   .lrow.cur { font-size: 1.06em; font-weight: 600; }
@@ -74,12 +77,11 @@
     height: 1.45em; line-height: 1.45em;
     font-size: max(9px, 0.68em); opacity: 0.55;
   }
+  /* 逐字点亮：每个字按自己的进度改透明度，不做整行扫描 */
   .ly-char {
-    background-image: linear-gradient(90deg,
-      rgba(248, 215, 192, 1) 0%, rgba(248, 215, 192, 1) var(--p, 0%),
-      rgba(248, 215, 192, 0.30) var(--p, 0%), rgba(248, 215, 192, 0.30) 100%);
-    -webkit-background-clip: text; background-clip: text;
-    color: transparent; -webkit-text-fill-color: transparent;
+    color: var(--lyric);
+    opacity: calc(0.22 + 0.78 * var(--p, 0));
+    transition: opacity 0.06s linear;
   }
   @keyframes lrowBump {
     from { transform: translateY(6px) scale(0.965); opacity: 0.45; }
@@ -92,6 +94,14 @@
     font-size: 12px; color: rgba(255, 255, 255, 0.42);
   }
   #empty.hidden { display: none; }
+  #fft {
+    position: absolute; left: 10px; right: 10px; bottom: 8px;
+    /* 必须显式给宽度：canvas 的 width 属性是绘制缓冲区尺寸，
+       不写 CSS 宽度时浏览器会拿它当布局尺寸，频谱会被压成几十像素 */
+    width: calc(100% - 20px);
+    height: 26px; z-index: 3; pointer-events: none;
+    opacity: 0.85;
+  }
   @keyframes cardIn {
     from { opacity: 0; transform: scale(0.94) translateX(-10px); }
     to { opacity: 1; transform: none; }
@@ -106,17 +116,7 @@
   /* 当前行放不下时自动来回滚动；非当前行仍然用省略号 */
   .cur-inner {
     display: block; width: 100%;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    will-change: transform;
-  }
-  .cur-inner.marquee {
-    width: max-content; text-overflow: clip;
-    animation: marq var(--dur, 8s) ease-in-out infinite;
-  }
-  @keyframes marq {
-    0%, 12% { transform: translateX(0); }
-    45%, 55% { transform: translateX(var(--shift, 0px)); }
-    88%, 100% { transform: translateX(0); }
+    white-space: nowrap;
   }
 </style>
 </head>
@@ -133,6 +133,7 @@
         <div id="lyricBox"></div>
       </div>
     </div>
+    <canvas id="fft"></canvas>
     <div id="empty" class="hidden">暂无歌词</div>
   </div>
 
@@ -154,15 +155,42 @@
   var base = 0, at = 0, hold = 0;
   var playing = false;
   var sizeOffset = 0;
+  var reverseOrder = false;
+  var fftOn = true;
+  var fftWidth = 100;
+  var fftReverse = false;
 
   function nowMs() {
     return playing ? base + (Date.now() - at) : hold;
   }
 
+  var clockInit = false;
+
+  // 每秒刷新一次进度，如果每次都把基准硬重置，采样误差会让当前行来回跳（瞎滚）。
+  // 这里分三档：小误差不动、中误差平滑追、大误差（切歌/拖动）直接对齐。
   function syncClock(t) {
     if (typeof t.posMs !== "number") return;
-    var ms = t.posMs + Math.max(0, Date.now() - (t.stamp || Date.now()));
-    base = ms; at = Date.now(); hold = ms;
+    var now = Date.now();
+    var target = t.posMs + Math.max(0, now - (t.stamp || now));
+
+    if (!playing) {
+      base = target; at = now; hold = target;
+      return;
+    }
+    if (!clockInit) {
+      clockInit = true;
+      base = target; at = now; hold = target;
+      return;
+    }
+
+    var cur = base + (now - at);
+    var drift = target - cur;
+    if (Math.abs(drift) > 1200) {
+      base = target; at = now; hold = target;
+    } else if (Math.abs(drift) > 60) {
+      base = cur + drift * 0.25;
+      at = now;
+    }
   }
 
   var measureCtx = null;
@@ -227,24 +255,6 @@
     }
   }
 
-  // 当前行比容器宽时改成跑马灯，让用户能看到被省略的后半句
-  function checkOverflow() {
-    if (!curInner) return;
-    var host = curInner.parentElement;
-    var over = curInner.scrollWidth - host.clientWidth;
-    if (over > 4) {
-      curInner.style.setProperty("--shift", "-" + (over + 2) + "px");
-      curInner.style.setProperty(
-        "--dur",
-        Math.max(6, Math.min(18, 3 + over / 22)).toFixed(1) + "s"
-      );
-      curInner.classList.add("marquee");
-    } else {
-      curInner.classList.remove("marquee");
-      curInner.style.removeProperty("--shift");
-    }
-  }
-
   function paint(ms) {
     for (var i = 0; i < spans.length; i++) {
       var it = spans[i], p = 0;
@@ -252,7 +262,9 @@
       else if (it.w) p = ms >= it.w[1] ? 1 : 0;
       else if (curLine && curLine.e > curLine.s) p = (ms - curLine.s) / (curLine.e - curLine.s);
       p = Math.max(0, Math.min(1, p));
-      it.el.style.setProperty("--p", (p * 100).toFixed(1) + "%");
+      // 前 5% 当成还没开始，避免时钟有几十毫秒提前时"没到的字"先亮一点
+      if (p < 0.05) p = 0;
+      it.el.style.setProperty("--p", p.toFixed(3));
     }
   }
 
@@ -266,9 +278,14 @@
     // 开头 / 结尾处不足 half 行时不补空行，整块在区域内居中
     var startK = -Math.min(half, curIdx);
     var endK = Math.min(half, lines.length - 1 - curIdx);
-    var curPos = -startK;
 
-    for (var k = startK; k <= endK; k++) {
+    var order = [];
+    for (var k0 = startK; k0 <= endK; k0++) order.push(k0);
+    if (reverseOrder) order.reverse();
+    var curPos = order.indexOf(0);
+
+    for (var oi = 0; oi < order.length; oi++) {
+      var k = order[oi];
       var line = lines[curIdx + k];
       var el = document.createElement("div");
       el.className = "lrow" + (k === 0 ? " cur" : "");
@@ -297,11 +314,18 @@
     curEl.classList.remove("bump");
     void curEl.offsetWidth;
     curEl.classList.add("bump");
-    checkOverflow();
   }
 
   function draw() {
     if (!lines.length) {
+      // 清空 DOM：只显示「暂无歌词」而留着旧的行，旧歌词会从下面透出来
+      if (box.childElementCount) {
+        box.innerHTML = "";
+        rows = [];
+        spans = [];
+        curInner = null;
+        curLine = null;
+      }
       emptyEl.classList.remove("hidden");
       return;
     }
@@ -320,6 +344,19 @@
     paint(ms);
   }
 
+  // 播放页的 --lp-color 直接取自封面主色，可能是深棕/深蓝。
+  // 贴在模糊背景上会看不清，这里按亮度做一次兜底提亮。
+  function readable(c) {
+    var m = String(c).match(/\d+(\.\d+)?/g);
+    if (!m || m.length < 3) return c;
+    var r = Number(m[0]), g = Number(m[1]), b = Number(m[2]);
+    var lum = (r * 0.299 + g * 0.587 + b * 0.114) / 255;
+    if (lum >= 0.55) return c;
+    var t = Math.min(1, (0.72 - lum) / 0.72);
+    var mix = function (v) { return Math.round(v + (255 - v) * (0.55 + t * 0.3)); };
+    return "rgb(" + mix(r) + " " + mix(g) + " " + mix(b) + ")";
+  }
+
   function render(d) {
     if (!d) return;
     var t = d.track || {};
@@ -327,6 +364,7 @@
     artistEl.textContent = t.artist || "";
 
     if (t.cover && bg.getAttribute("src") !== t.cover) bg.src = t.cover;
+    if (t.color) document.documentElement.style.setProperty("--lyric", t.color);
 
     playing = !!t.playing;
     if (Array.isArray(t.lines)) {
@@ -338,9 +376,20 @@
         curIdx = -2;
       }
     }
+    fftOn = d.fftOn !== false;
+    fftWidth = Math.max(40, Math.min(100, Number(d.fftWidth) || 100));
+    fftReverse = d.fftReverse === true;
+
+    var nextRev = d.reverse === true;
+    if (nextRev !== reverseOrder) {
+      reverseOrder = nextRev;
+      if (lines.length && curIdx !== -2) rebuild();
+    }
+
     var nextOffset = Number(d.sizeOffset) || 0;
     if (nextOffset !== sizeOffset) {
       sizeOffset = nextOffset;
+      sizeFft();
       if (lines.length && curIdx !== -2) rebuild();
     }
 
@@ -359,9 +408,73 @@
     if (resizeTimer) return;
     resizeTimer = setTimeout(function () {
       resizeTimer = 0;
+      sizeFft();
       if (lines.length && curIdx !== -2) rebuild();
     }, 80);
   });
+
+  // 底部频谱：数据由主进程从播放器转发过来（不同进程拿不到 FFT）
+  var fftCanvas = document.getElementById("fft");
+  var fctx = fftCanvas.getContext("2d");
+  var fftData = null;
+  var fftLevels = null;
+
+  function sizeFft() {
+    var r = fftCanvas.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    fftCanvas.width = Math.max(1, Math.round(r.width * dpr));
+    fftCanvas.height = Math.max(1, Math.round(r.height * dpr));
+    fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  sizeFft();
+
+  api.onFft(function (d) {
+    fftData = d;
+  });
+
+  function drawFft() {
+    var r = fftCanvas.getBoundingClientRect();
+    var w = r.width, h = r.height;
+    if (!w || !h) return;
+    var n = 40;
+    if (!fftLevels || fftLevels.length !== n) fftLevels = new Float32Array(n);
+    fctx.clearRect(0, 0, w, h);
+    if (!fftOn) return;
+    // 颜色取播放页的 --lp-color（封面取色），和软件内频谱一致
+    var lc = getComputedStyle(document.documentElement).getPropertyValue("--lyric").trim();
+    var lm = lc.match(/\d+/g);
+    var fftRgb = lm && lm.length >= 3 ? [Number(lm[0]), Number(lm[1]), Number(lm[2])] : [255, 255, 255];
+    var src = (fftData && fftData.ldata) || null;
+    // 宽度按百分比收窄并居中；反向时低频画到右边
+    var pct = Math.max(0.4, Math.min(1, fftWidth / 100));
+    var drawW = w * pct;
+    var offX = (w - drawW) / 2;
+    var bw = drawW / n;
+    for (var i = 0; i < n; i++) {
+      var v = 0;
+      var si = fftReverse ? n - 1 - i : i;
+      if (src) {
+        var start = Math.floor((si / n) * src.length);
+        var end = Math.floor(((si + 1) / n) * src.length);
+        for (var j = start; j < end; j++) v = Math.max(v, src[j] || 0);
+      }
+      // 播放器返回的是 0~1 的归一化幅度，不是 0~255
+      var target = Math.min(1, v * 1.2);
+      fftLevels[i] += (target - fftLevels[i]) * 0.4;
+      var bh = Math.max(1, fftLevels[i] * h);
+      fctx.fillStyle = "rgba(" + fftRgb[0] + "," + fftRgb[1] + "," + fftRgb[2] + "," + (0.16 + fftLevels[i] * 0.5).toFixed(3) + ")";
+      // 圆角柱，和播放页的频谱一致；从底部向上生长
+      var bw2 = Math.max(1, bw - 2);
+      fctx.beginPath();
+      if (fctx.roundRect) {
+        fctx.roundRect(offX + i * bw + 1, h - bh, bw2, bh, Math.min(2, bw2 / 2));
+      } else {
+        fctx.rect(offX + i * bw + 1, h - bh, bw2, bh);
+      }
+      fctx.fill();
+    }
+  }
+  setInterval(drawFft, 55);
 
   setInterval(draw, 60);
   api.lyricReady();
